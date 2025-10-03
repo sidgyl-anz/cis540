@@ -135,23 +135,31 @@ def openssl_encrypt(pubkey_path, message, modulus_len, mode):
 def demo_repeated_encryption(pubkey_path, modulus_len, mode, label):
     """Show whether repeated encryption returns identical ciphertexts."""
 
-    sample_message = b"90"
-    first = openssl_encrypt(pubkey_path, sample_message, modulus_len, mode)
-    second = openssl_encrypt(pubkey_path, sample_message, modulus_len, mode)
-    if first is None or second is None:
+    samples = [
+        ("ASCII digits '90'", b"90"),
+        ("single-byte value 90", bytes([90])),
+    ]
+
+    for description, sample_message in samples:
+        first = openssl_encrypt(pubkey_path, sample_message, modulus_len, mode)
+        second = openssl_encrypt(pubkey_path, sample_message, modulus_len, mode)
+        if first is None or second is None:
+            print(
+                f"[{label}] Unable to encrypt {description} in {mode} mode. "
+                "(Sample message may be incompatible.)"
+            )
+            continue
+        same = first == second
         print(
-            f"[{label}] Unable to perform demo encryption in {mode} mode. "
-            "(Sample message may be incompatible.)"
+            f"[{label}] Demo encrypting {description} twice in {mode} mode"
         )
-        return
-    same = first == second
-    print(f"[{label}] Demo encrypting b'90' twice in {mode} mode")
-    print(f"[{label}] First ciphertext:  {first.hex()}")
-    print(f"[{label}] Second ciphertext: {second.hex()}")
-    if same:
-        print(f"[{label}] Result: ciphertexts MATCH (deterministic)")
-    else:
-        print(f"[{label}] Result: ciphertexts DIFFER (randomized padding)")
+        print(f"[{label}] First ciphertext:  {first.hex()}")
+        print(f"[{label}] Second ciphertext: {second.hex()}")
+        if same:
+            print(f"[{label}] Result: ciphertexts MATCH (deterministic)")
+        else:
+            print(f"[{label}] Result: ciphertexts DIFFER (randomized padding)")
+        print()
 
 
 def parse_args():
