@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Brute force Alice's raw-RSA encrypted grade using openssl pkeyutl only."""
+"""Brute force Alice's RSA-encrypted grade using openssl pkeyutl only."""
 
 import os
+import argparse
 import subprocess
 import tempfile
 
@@ -80,38 +81,55 @@ def write_temp_key():
         tmp.close()
 
 
-def openssl_encrypt_raw(pubkey_path, message, modulus_len):
-    """Encrypt `message` using openssl pkeyutl with raw RSA padding."""
-    if len(message) > modulus_len:
-        return None
-    padded = message.rjust(modulus_len, b"\x00")
+def openssl_encrypt(pubkey_path, message, modulus_len, padding_mode):
+    """Encrypt ``message`` using ``openssl pkeyutl`` with the requested padding.
+
+    ``padding_mode`` may be ``"none"`` for raw RSA (zero-left-padded to the
+    modulus length), ``"pkcs1"`` to request explicit PKCS#1 v1.5 padding via
+    ``-pkeyopt``, or ``"default"`` to invoke the command with no padding
+    options (``openssl``'s default is PKCS#1 padding). When the plaintext is too
+    large for the requested padding, ``None`` is returned instead of raising.
+    """
+    if padding_mode == "none":
+        if len(message) > modulus_len:
+            return None
+        input_bytes = message.rjust(modulus_len, b"\x00")
+    else:
+        if len(message) >= modulus_len:
+            return None
+        input_bytes = message
     tmp_in = tempfile.NamedTemporaryFile(delete=False)
     tmp_out = tempfile.NamedTemporaryFile(delete=False)
     try:
-        tmp_in.write(padded)
+        tmp_in.write(input_bytes)
         tmp_in.close()
         tmp_out.close()
+        cmd = [
+            "openssl",
+            "pkeyutl",
+            "-encrypt",
+            "-pubin",
+            "-inkey",
+            pubkey_path,
+            "-in",
+            tmp_in.name,
+            "-out",
+            tmp_out.name,
+        ]
+        if padding_mode == "none":
+            cmd.extend(["-pkeyopt", "rsa_padding_mode:none"])
+        elif padding_mode == "pkcs1":
+            cmd.extend(["-pkeyopt", "rsa_padding_mode:pkcs1"])
         subprocess.run(
-            [
-                "openssl",
-                "pkeyutl",
-                "-encrypt",
-                "-pubin",
-                "-inkey",
-                pubkey_path,
-                "-pkeyopt",
-                "rsa_padding_mode:none",
-                "-in",
-                tmp_in.name,
-                "-out",
-                tmp_out.name,
-            ],
+            cmd,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         with open(tmp_out.name, "rb") as f:
             return f.read()
+    except subprocess.CalledProcessError:
+        return None
     finally:
         if os.path.exists(tmp_in.name):
             os.remove(tmp_in.name)
@@ -119,14 +137,30 @@ def openssl_encrypt_raw(pubkey_path, message, modulus_len):
             os.remove(tmp_out.name)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--padding-mode",
+        choices=["none", "pkcs1", "default"],
+        default="none",
+        help=(
+            "Padding mode for openssl pkeyutl. Use 'none' for raw RSA (default), "
+            "'pkcs1' to explicitly request PKCS#1 padding, or 'default' to run "
+            "without any padding options."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     target = bytes.fromhex(TARGET_CIPHER_HEX)
     modulus_len = len(target)
     pubkey_path = write_temp_key()
     try:
         candidates = build_candidates()
         for idx, cand in enumerate(candidates, start=1):
-            cipher = openssl_encrypt_raw(pubkey_path, cand, modulus_len)
+            cipher = openssl_encrypt(pubkey_path, cand, modulus_len, args.padding_mode)
             if cipher == target:
                 print("MATCH FOUND!")
                 print("candidate bytes repr:", repr(cand))
