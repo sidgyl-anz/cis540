@@ -81,23 +81,8 @@ def write_temp_key():
         tmp.close()
 
 
-def openssl_encrypt(pubkey_path, message, modulus_len, mode):
-    """Encrypt `message` using openssl pkeyutl.
-
-    The "raw" mode mirrors the previous behaviour of using
-    ``-pkeyopt rsa_padding_mode:none`` and left-padding the message to the
-    modulus size.  The "default" mode issues the command without any padding
-    options, matching the plain ``openssl pkeyutl -encrypt`` invocation shown in
-    the lecture screenshot.
-    """
-    if mode == "raw":
-        if len(message) > modulus_len:
-            return None
-        data = message.rjust(modulus_len, b"\x00")
-        extra_args = ["-pkeyopt", "rsa_padding_mode:none"]
-    else:
-        data = message
-        extra_args = []
+def _openssl_encrypt(pubkey_path, data, extra_args):
+    """Invoke ``openssl pkeyutl`` with ``data`` written to a temp file."""
     tmp_in = tempfile.NamedTemporaryFile(delete=False)
     tmp_out = tempfile.NamedTemporaryFile(delete=False)
     try:
@@ -132,6 +117,30 @@ def openssl_encrypt(pubkey_path, message, modulus_len, mode):
             os.remove(tmp_out.name)
 
 
+def openssl_encrypt_raw(pubkey_path, message, modulus_len):
+    """Encrypt `message` using openssl pkeyutl with raw RSA padding."""
+    if len(message) > modulus_len:
+        return None
+    padded = message.rjust(modulus_len, b"\x00")
+    return _openssl_encrypt(
+        pubkey_path,
+        padded,
+        ["-pkeyopt", "rsa_padding_mode:none"],
+    )
+
+
+def openssl_encrypt_default(pubkey_path, message):
+    """Encrypt `message` using openssl pkeyutl with default padding."""
+    return _openssl_encrypt(pubkey_path, message, [])
+
+
+def openssl_encrypt(pubkey_path, message, modulus_len, mode):
+    """Encrypt using either raw or default padding depending on ``mode``."""
+    if mode == "default":
+        return openssl_encrypt_default(pubkey_path, message)
+    return openssl_encrypt_raw(pubkey_path, message, modulus_len)
+
+
 def demo_repeated_encryption(pubkey_path, modulus_len, mode, label):
     """Show whether repeated encryption returns identical ciphertexts."""
 
@@ -150,9 +159,7 @@ def demo_repeated_encryption(pubkey_path, modulus_len, mode, label):
             )
             continue
         same = first == second
-        print(
-            f"[{label}] Demo encrypting {description} twice in {mode} mode"
-        )
+        print(f"[{label}] Demo encrypting {description} twice in {mode} mode")
         print(f"[{label}] First ciphertext:  {first.hex()}")
         print(f"[{label}] Second ciphertext: {second.hex()}")
         if same:
@@ -163,7 +170,9 @@ def demo_repeated_encryption(pubkey_path, modulus_len, mode, label):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Deterministic RSA brute-force helper")
+    parser = argparse.ArgumentParser(
+        description="Deterministic RSA brute-force helper"
+    )
     parser.add_argument(
         "--mode",
         choices=["raw", "default"],
