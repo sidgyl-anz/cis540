@@ -31,7 +31,33 @@ def build_candidates():
         cands.append(s + b"\n")
         cands.append(s + b"\r\n")
     # Common grade strings.
-    for g in ["A", "A+", "A-", "B", "B+", "B-", "C", "D", "F", "Pass", "Fail"]:
+    grade_strings = [
+        "A+",
+        "A",
+        "A-",
+        "B+",
+        "B",
+        "B-",
+        "C+",
+        "C",
+        "C-",
+        "D+",
+        "D",
+        "D-",
+        "E",
+        "F",
+        "XF",
+        "I",
+        "W",
+        "P",
+        "S",
+        "U",
+        "AU",
+        "NG",
+        "Pass",
+        "Fail",
+    ]
+    for g in grade_strings:
         cands.append(g.encode())
     # Deduplicate while preserving order.
     seen = set()
