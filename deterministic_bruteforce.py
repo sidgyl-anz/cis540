@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Brute force Alice's RSA-encrypted grade using openssl pkeyutl only."""
 
+import csv
 import os
 import subprocess
 import tempfile
@@ -229,34 +230,56 @@ def main():
     modulus_len = len(target)
     pubkey_path = write_temp_key()
     padding_modes = ("none", "pkcs1", "default")
+    log_path = os.path.join(os.getcwd(), "bruteforce_attempts_log.csv")
     try:
         verify_mode_reproducibility(pubkey_path, modulus_len, padding_modes)
         candidates = build_candidates()
         attempts = 0
-        for idx, cand in enumerate(candidates, start=1):
-            for padding_mode in padding_modes:
-                cipher = openssl_encrypt(
-                    pubkey_path, cand, modulus_len, padding_mode
-                )
-                if cipher is None:
-                    continue
-                attempts += 1
-                if cipher == target:
-                    print("MATCH FOUND!")
-                    print("padding mode:", padding_mode)
-                    print("candidate bytes repr:", repr(cand))
+        with open(log_path, "w", newline="", encoding="utf-8") as log_file:
+            writer = csv.writer(log_file)
+            writer.writerow(["padding_mode", "candidate_repr", "candidate_text", "result"])
+            for idx, cand in enumerate(candidates, start=1):
+                for padding_mode in padding_modes:
+                    candidate_text: str
                     try:
-                        print("candidate text:", cand.decode())
+                        candidate_text = cand.decode()
                     except UnicodeDecodeError:
-                        print("candidate text: (non-utf8)")
-                    return
-            if idx % 100 == 0:
-                print(
-                    "Tried "
-                    f"{idx} candidates across {len(padding_modes)} padding modes"
-                    f" ({attempts} successful encryptions)..."
-                )
+                        candidate_text = "(non-utf8)"
+                    cipher = openssl_encrypt(
+                        pubkey_path, cand, modulus_len, padding_mode
+                    )
+                    if cipher is None:
+                        writer.writerow(
+                            [
+                                padding_mode,
+                                repr(cand),
+                                candidate_text,
+                                "skipped - plaintext too long",
+                            ]
+                        )
+                        continue
+                    attempts += 1
+                    if cipher == target:
+                        writer.writerow(
+                            [padding_mode, repr(cand), candidate_text, "match"]
+                        )
+                        print("MATCH FOUND!")
+                        print("padding mode:", padding_mode)
+                        print("candidate bytes repr:", repr(cand))
+                        print("candidate text:", candidate_text)
+                        print(f"Attempt details logged to {log_path}")
+                        return
+                    writer.writerow(
+                        [padding_mode, repr(cand), candidate_text, "no match"]
+                    )
+                if idx % 100 == 0:
+                    print(
+                        "Tried "
+                        f"{idx} candidates across {len(padding_modes)} padding modes"
+                        f" ({attempts} successful encryptions)..."
+                    )
         print("No match found. Try expanding the candidate list.")
+        print(f"Attempt details logged to {log_path}")
     finally:
         if os.path.exists(pubkey_path):
             os.remove(pubkey_path)
