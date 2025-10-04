@@ -86,20 +86,24 @@ def number_to_words(n):
     return f"one hundred {remainder_words}"
 
 
+def _newline_variants(value):
+    """Yield ``value`` along with LF and CRLF terminated variants."""
+
+    yield value
+    yield value + b"\n"
+    yield value + b"\r\n"
+
+
 def build_candidates():
     """Generate a small list of plausible plaintext grades."""
-    cands = []
+
+    candidates = []
     # Whole number scores 0-150 as ASCII bytes, plus newline variants.
     for i in range(0, 151):
-        s = str(i).encode("ascii")
-        cands.append(s)
-        cands.append(s + b"\n")
-        cands.append(s + b"\r\n")
+        ascii_value = str(i).encode("ascii")
+        candidates.extend(_newline_variants(ascii_value))
         # Single-byte value for the numeric grade, plus newline variants.
-        raw_byte = bytes([i])
-        cands.append(raw_byte)
-        cands.append(raw_byte + b"\n")
-        cands.append(raw_byte + b"\r\n")
+        candidates.extend(_newline_variants(bytes([i])))
     # Common grade strings.
     grade_strings = [
         "A+",
@@ -127,17 +131,17 @@ def build_candidates():
         "Pass",
         "Fail",
     ]
-    for g in grade_strings:
-        cands.append(g.encode())
+    for grade in grade_strings:
+        candidates.append(grade.encode())
     # Deduplicate while preserving order.
     seen = set()
-    uniq = []
-    for item in cands:
+    unique_candidates = []
+    for item in candidates:
         if item in seen:
             continue
         seen.add(item)
-        uniq.append(item)
-    return uniq
+        unique_candidates.append(item)
+    return unique_candidates
 
 
 def write_temp_key():
@@ -189,16 +193,15 @@ def openssl_encrypt(pubkey_path, message, modulus_len, padding_mode):
             cmd.extend(["-pkeyopt", "rsa_padding_mode:none"])
         elif padding_mode == "pkcs1":
             cmd.extend(["-pkeyopt", "rsa_padding_mode:pkcs1"])
-        subprocess.run(
+        result = subprocess.run(
             cmd,
-            check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        if result.returncode != 0:
+            return None
         with open(tmp_out.name, "rb") as f:
             return f.read()
-    except subprocess.CalledProcessError:
-        return None
     finally:
         if os.path.exists(tmp_in.name):
             os.remove(tmp_in.name)
