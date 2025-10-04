@@ -207,27 +207,45 @@ def openssl_encrypt(pubkey_path, message, modulus_len, padding_mode):
 
 
 def verify_mode_reproducibility(pubkey_path, modulus_len, padding_modes):
-    """Encrypt ``b"100"`` twice with each padding mode and report if they match.
+    """Encrypt a sample grade multiple times and show the ciphertexts.
 
     Returns a ``dict`` mapping each padding mode to ``True`` when reproducible.
     """
 
     test_plaintext = b"100"
-    print("Verifying reproducibility of encrypting b'100' under each padding mode...")
+    samples_per_mode = 3
+    print(
+        "Verifying reproducibility of encrypting b'100' under each padding mode by"
+        f" running {samples_per_mode} sample encryptions..."
+    )
     reproducible = {}
     for padding_mode in padding_modes:
-        first = openssl_encrypt(pubkey_path, test_plaintext, modulus_len, padding_mode)
-        second = openssl_encrypt(pubkey_path, test_plaintext, modulus_len, padding_mode)
-        if first is None or second is None:
-            print(f"  {padding_mode}: plaintext too long for this padding mode; skipped")
-            reproducible[padding_mode] = False
-            continue
-        if first == second:
-            print(f"  {padding_mode}: identical ciphertexts produced")
-            reproducible[padding_mode] = True
+        sample_ciphertexts = []
+        for attempt in range(1, samples_per_mode + 1):
+            cipher = openssl_encrypt(
+                pubkey_path, test_plaintext, modulus_len, padding_mode
+            )
+            if cipher is None:
+                print(
+                    f"  {padding_mode}: plaintext too long for this padding mode; skipping"
+                    " sample display"
+                )
+                reproducible[padding_mode] = False
+                break
+            sample_ciphertexts.append(cipher)
+            print(f"  {padding_mode} sample #{attempt}: {cipher.hex()}")
         else:
-            print(f"  {padding_mode}: ciphertexts differ (padding introduces randomness)")
-            reproducible[padding_mode] = False
+            unique_ciphertexts = {c for c in sample_ciphertexts}
+            if len(unique_ciphertexts) == 1:
+                print(
+                    f"  {padding_mode}: ciphertexts identical across {samples_per_mode} attempts"
+                )
+                reproducible[padding_mode] = True
+            else:
+                print(
+                    f"  {padding_mode}: ciphertexts differ across {samples_per_mode} attempts"
+                )
+                reproducible[padding_mode] = False
     return reproducible
 
 
@@ -237,55 +255,84 @@ def main():
     pubkey_path = write_temp_key()
     padding_modes = ("none", "pkcs1", "default")
     log_path = os.path.join(os.getcwd(), "bruteforce_attempts_log.csv")
+    example_attempts_to_print = 5
+    printed_examples = 0
+    notified_log_only = False
     try:
         reproducible = verify_mode_reproducibility(
             pubkey_path, modulus_len, padding_modes
         )
-        usable_modes = [
-            mode for mode in padding_modes if reproducible.get(mode, False)
+        unusable_modes = [
+            mode for mode, is_reproducible in reproducible.items() if not is_reproducible
         ]
-        if not usable_modes:
-            print("No deterministic padding modes available; aborting brute force.")
-            return
-        skipped_modes = [mode for mode in padding_modes if mode not in usable_modes]
-        if skipped_modes:
+        if unusable_modes:
             print(
-                "Skipping nondeterministic padding modes:",
-                ", ".join(skipped_modes),
+                "NOTE: The following padding modes appear nondeterministic but will still be\n"
+                "      attempted as requested: " + ", ".join(unusable_modes)
             )
-        print(
-            "Using deterministic padding modes:",
-            ", ".join(usable_modes),
-        )
+        print("Proceeding with all padding modes: none, pkcs1, default")
         candidates = build_candidates()
         attempts = 0
-        for idx, cand in enumerate(candidates, start=1):
-            for padding_mode in usable_modes:
-                cipher = openssl_encrypt(
-                    pubkey_path, cand, modulus_len, padding_mode
-                )
-                if cipher is None:
-                    continue
-                attempts += 1
-                if cipher == target:
-                    print("MATCH FOUND!")
-                    print("padding mode:", padding_mode)
-                    print("candidate bytes repr:", repr(cand))
-                    try:
-                        candidate_text = cand.decode()
-                    except UnicodeDecodeError:
-                        print("candidate text: (non-utf8)")
-                    return
-            if idx % 100 == 0:
-                mode_count = len(usable_modes)
-                mode_word = "mode" if mode_count == 1 else "modes"
-                print(
-                    "Tried "
-                    f"{idx} candidates across {mode_count} padding {mode_word}"
-                    f" ({attempts} successful encryptions)..."
-                )
+        with open(log_path, "w", newline="", encoding="utf-8") as log_file:
+            writer = csv.writer(log_file)
+            header = [
+                "attempt_number",
+                "candidate_index",
+                "padding_mode",
+                "candidate_repr",
+                "cipher_hex",
+            ]
+            writer.writerow(header)
+            print("# Attempt log examples (full log written to bruteforce_attempts_log.csv)")
+            print(",".join(header))
+            for idx, cand in enumerate(candidates, start=1):
+                for padding_mode in padding_modes:
+                    cipher = openssl_encrypt(
+                        pubkey_path, cand, modulus_len, padding_mode
+                    )
+                    if cipher is None:
+                        continue
+                    attempts += 1
+                    row = [
+                        attempts,
+                        idx,
+                        padding_mode,
+                        repr(cand),
+                        cipher.hex(),
+                    ]
+                    writer.writerow(row)
+                    log_file.flush()
+                    if printed_examples < example_attempts_to_print:
+                        print(",".join(str(value) for value in row))
+                        printed_examples += 1
+                        if printed_examples == example_attempts_to_print:
+                            print(
+                                "(Further attempts are logged to bruteforce_attempts_log.csv only.)"
+                            )
+                    elif not notified_log_only:
+                        print(
+                            "(All additional attempts are recorded in bruteforce_attempts_log.csv.)"
+                        )
+                        notified_log_only = True
+                    if cipher == target:
+                        print("MATCH FOUND!")
+                        print("padding mode:", padding_mode)
+                        print("candidate bytes repr:", repr(cand))
+                        try:
+                            candidate_text = cand.decode()
+                        except UnicodeDecodeError:
+                            print("candidate text: (non-utf8)")
+                        else:
+                            print("candidate text:", candidate_text)
+                        return
+                if idx % 100 == 0:
+                    print(
+                        "Tried "
+                        f"{idx} candidates across {len(padding_modes)} padding modes"
+                        f" ({attempts} successful encryptions)..."
+                    )
         print("No match found. Try expanding the candidate list.")
-        print(f"Attempt details logged to {log_path}")
+        print(f"Attempt details logged to {log_path} and echoed above.")
     finally:
         if os.path.exists(pubkey_path):
             os.remove(pubkey_path)
