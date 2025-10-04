@@ -241,51 +241,66 @@ def main():
         reproducible = verify_mode_reproducibility(
             pubkey_path, modulus_len, padding_modes
         )
-        usable_modes = [
-            mode for mode in padding_modes if reproducible.get(mode, False)
+        unusable_modes = [
+            mode for mode, is_reproducible in reproducible.items() if not is_reproducible
         ]
-        if not usable_modes:
-            print("No deterministic padding modes available; aborting brute force.")
-            return
-        skipped_modes = [mode for mode in padding_modes if mode not in usable_modes]
-        if skipped_modes:
+        if unusable_modes:
             print(
-                "Skipping nondeterministic padding modes:",
-                ", ".join(skipped_modes),
+                "NOTE: The following padding modes appear nondeterministic but will still be\n"
+                "      attempted as requested: " + ", ".join(unusable_modes)
             )
-        print(
-            "Using deterministic padding modes:",
-            ", ".join(usable_modes),
-        )
+        print("Proceeding with all padding modes: none, pkcs1, default")
         candidates = build_candidates()
         attempts = 0
-        for idx, cand in enumerate(candidates, start=1):
-            for padding_mode in usable_modes:
-                cipher = openssl_encrypt(
-                    pubkey_path, cand, modulus_len, padding_mode
-                )
-                if cipher is None:
-                    continue
-                attempts += 1
-                if cipher == target:
-                    print("MATCH FOUND!")
-                    print("padding mode:", padding_mode)
-                    print("candidate bytes repr:", repr(cand))
-                    try:
-                        candidate_text = cand.decode()
-                    except UnicodeDecodeError:
-                        print("candidate text: (non-utf8)")
-                    return
-            if idx % 100 == 0:
-                mode_count = len(usable_modes)
-                mode_word = "mode" if mode_count == 1 else "modes"
-                print(
-                    "Tried "
-                    f"{idx} candidates across {mode_count} padding {mode_word}"
-                    f" ({attempts} successful encryptions)..."
-                )
+        with open(log_path, "w", newline="", encoding="utf-8") as log_file:
+            writer = csv.writer(log_file)
+            header = [
+                "attempt_number",
+                "candidate_index",
+                "padding_mode",
+                "candidate_repr",
+                "cipher_hex",
+            ]
+            writer.writerow(header)
+            print("# Attempt log (mirrored to bruteforce_attempts_log.csv)")
+            print(",".join(header))
+            for idx, cand in enumerate(candidates, start=1):
+                for padding_mode in padding_modes:
+                    cipher = openssl_encrypt(
+                        pubkey_path, cand, modulus_len, padding_mode
+                    )
+                    if cipher is None:
+                        continue
+                    attempts += 1
+                    row = [
+                        attempts,
+                        idx,
+                        padding_mode,
+                        repr(cand),
+                        cipher.hex(),
+                    ]
+                    writer.writerow(row)
+                    log_file.flush()
+                    print(",".join(str(value) for value in row))
+                    if cipher == target:
+                        print("MATCH FOUND!")
+                        print("padding mode:", padding_mode)
+                        print("candidate bytes repr:", repr(cand))
+                        try:
+                            candidate_text = cand.decode()
+                        except UnicodeDecodeError:
+                            print("candidate text: (non-utf8)")
+                        else:
+                            print("candidate text:", candidate_text)
+                        return
+                if idx % 100 == 0:
+                    print(
+                        "Tried "
+                        f"{idx} candidates across {len(padding_modes)} padding modes"
+                        f" ({attempts} successful encryptions)..."
+                    )
         print("No match found. Try expanding the candidate list.")
-        print(f"Attempt details logged to {log_path}")
+        print(f"Attempt details logged to {log_path} and echoed above.")
     finally:
         if os.path.exists(pubkey_path):
             os.remove(pubkey_path)
