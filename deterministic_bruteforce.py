@@ -254,6 +254,8 @@ def main():
     modulus_len = len(target)
     pubkey_path = write_temp_key()
     padding_modes = ("none", "pkcs1", "default")
+    print("Target ciphertext (hex):")
+    print(TARGET_CIPHER_HEX)
     log_path = os.path.join(os.getcwd(), "bruteforce_attempts_log.csv")
     example_attempts_to_print = 5
     printed_examples = 0
