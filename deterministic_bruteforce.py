@@ -2,7 +2,6 @@
 """Brute force Alice's RSA-encrypted grade using openssl pkeyutl only."""
 
 import os
-import argparse
 import subprocess
 import tempfile
 
@@ -25,12 +24,17 @@ TARGET_CIPHER_HEX = (
 def build_candidates():
     """Generate a small list of plausible plaintext grades."""
     cands = []
-    # Whole number scores 0-150, plus newline variants.
+    # Whole number scores 0-150 as ASCII bytes, plus newline variants.
     for i in range(0, 151):
-        s = str(i).encode()
+        s = str(i).encode("ascii")
         cands.append(s)
         cands.append(s + b"\n")
         cands.append(s + b"\r\n")
+        # Single-byte value for the numeric grade, plus newline variants.
+        raw_byte = bytes([i])
+        cands.append(raw_byte)
+        cands.append(raw_byte + b"\n")
+        cands.append(raw_byte + b"\r\n")
     # Common grade strings.
     grade_strings = [
         "A+",
@@ -137,40 +141,83 @@ def openssl_encrypt(pubkey_path, message, modulus_len, padding_mode):
             os.remove(tmp_out.name)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--padding-mode",
-        choices=["none", "pkcs1", "default"],
-        default="none",
-        help=(
-            "Padding mode for openssl pkeyutl. Use 'none' for raw RSA (default), "
-            "'pkcs1' to explicitly request PKCS#1 padding, or 'default' to run "
-            "without any padding options."
-        ),
-    )
-    return parser.parse_args()
+def verify_mode_reproducibility(pubkey_path, modulus_len, padding_modes):
+    """Encrypt ``b"100"`` twice with each padding mode and report if they match.
+
+    Returns a ``dict`` mapping each padding mode to ``True`` when reproducible.
+    """
+
+    test_plaintext = b"100"
+    print("Verifying reproducibility of encrypting b'100' under each padding mode...")
+    reproducible = {}
+    for padding_mode in padding_modes:
+        first = openssl_encrypt(pubkey_path, test_plaintext, modulus_len, padding_mode)
+        second = openssl_encrypt(pubkey_path, test_plaintext, modulus_len, padding_mode)
+        if first is None or second is None:
+            print(f"  {padding_mode}: plaintext too long for this padding mode; skipped")
+            reproducible[padding_mode] = False
+            continue
+        if first == second:
+            print(f"  {padding_mode}: identical ciphertexts produced")
+            reproducible[padding_mode] = True
+        else:
+            print(f"  {padding_mode}: ciphertexts differ (padding introduces randomness)")
+            reproducible[padding_mode] = False
+    return reproducible
 
 
 def main():
-    args = parse_args()
     target = bytes.fromhex(TARGET_CIPHER_HEX)
     modulus_len = len(target)
     pubkey_path = write_temp_key()
+    padding_modes = ("none", "pkcs1", "default")
     try:
+        reproducible = verify_mode_reproducibility(
+            pubkey_path, modulus_len, padding_modes
+        )
+        usable_modes = [
+            mode for mode in padding_modes if reproducible.get(mode, False)
+        ]
+        if not usable_modes:
+            print("No deterministic padding modes available; aborting brute force.")
+            return
+        skipped_modes = [mode for mode in padding_modes if mode not in usable_modes]
+        if skipped_modes:
+            print(
+                "Skipping nondeterministic padding modes:",
+                ", ".join(skipped_modes),
+            )
+        print(
+            "Using deterministic padding modes:",
+            ", ".join(usable_modes),
+        )
         candidates = build_candidates()
+        attempts = 0
         for idx, cand in enumerate(candidates, start=1):
-            cipher = openssl_encrypt(pubkey_path, cand, modulus_len, args.padding_mode)
-            if cipher == target:
-                print("MATCH FOUND!")
-                print("candidate bytes repr:", repr(cand))
-                try:
-                    print("candidate text:", cand.decode())
-                except UnicodeDecodeError:
-                    print("candidate text: (non-utf8)")
-                return
+            for padding_mode in usable_modes:
+                cipher = openssl_encrypt(
+                    pubkey_path, cand, modulus_len, padding_mode
+                )
+                if cipher is None:
+                    continue
+                attempts += 1
+                if cipher == target:
+                    print("MATCH FOUND!")
+                    print("padding mode:", padding_mode)
+                    print("candidate bytes repr:", repr(cand))
+                    try:
+                        print("candidate text:", cand.decode())
+                    except UnicodeDecodeError:
+                        print("candidate text: (non-utf8)")
+                    return
             if idx % 100 == 0:
-                print(f"Tried {idx} candidates...")
+                mode_count = len(usable_modes)
+                mode_word = "mode" if mode_count == 1 else "modes"
+                print(
+                    "Tried "
+                    f"{idx} candidates across {mode_count} padding {mode_word}"
+                    f" ({attempts} successful encryptions)..."
+                )
         print("No match found. Try expanding the candidate list.")
     finally:
         if os.path.exists(pubkey_path):
