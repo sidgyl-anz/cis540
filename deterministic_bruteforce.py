@@ -2,7 +2,6 @@
 """Brute force Alice's RSA-encrypted grade using openssl pkeyutl only."""
 
 import os
-import argparse
 import subprocess
 import tempfile
 
@@ -22,15 +21,86 @@ TARGET_CIPHER_HEX = (
 )
 
 
+WORDS_0_TO_19 = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+]
+
+TENS_WORDS = [
+    "",
+    "",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+]
+
+
+def _two_digit_words(n):
+    """Return the English words for ``n`` where ``0 <= n < 100``."""
+
+    if not 0 <= n < 100:
+        raise ValueError("Expected a number between 0 and 99 inclusive")
+    if n < 20:
+        return WORDS_0_TO_19[n]
+    tens, ones = divmod(n, 10)
+    if ones == 0:
+        return TENS_WORDS[tens]
+    return f"{TENS_WORDS[tens]}-{WORDS_0_TO_19[ones]}"
+
+
+def number_to_words(n):
+    """Convert ``n`` (0-150) to its English words representation."""
+
+    if not 0 <= n <= 150:
+        raise ValueError("Only numbers from 0 through 150 are supported")
+    if n < 100:
+        return _two_digit_words(n)
+    if n == 100:
+        return "one hundred"
+    remainder = n - 100
+    remainder_words = _two_digit_words(remainder)
+    return f"one hundred {remainder_words}"
+
+
 def build_candidates():
     """Generate a small list of plausible plaintext grades."""
     cands = []
-    # Whole number scores 0-150, plus newline variants.
+    # Whole number scores 0-150 as bytes, plus newline variants.
     for i in range(0, 151):
         s = str(i).encode()
         cands.append(s)
         cands.append(s + b"\n")
         cands.append(s + b"\r\n")
+        cands.append(bytes([i]))
+        cands.append(bytes([i]) + b"\n")
+        cands.append(bytes([i]) + b"\r\n")
+        words = number_to_words(i).encode()
+        cands.append(words)
+        cands.append(words + b"\n")
+        cands.append(words + b"\r\n")
     # Common grade strings.
     grade_strings = [
         "A+",
@@ -137,40 +207,55 @@ def openssl_encrypt(pubkey_path, message, modulus_len, padding_mode):
             os.remove(tmp_out.name)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--padding-mode",
-        choices=["none", "pkcs1", "default"],
-        default="none",
-        help=(
-            "Padding mode for openssl pkeyutl. Use 'none' for raw RSA (default), "
-            "'pkcs1' to explicitly request PKCS#1 padding, or 'default' to run "
-            "without any padding options."
-        ),
-    )
-    return parser.parse_args()
+def verify_mode_reproducibility(pubkey_path, modulus_len, padding_modes):
+    """Encrypt ``b"100"`` twice with each padding mode and report if they match."""
+
+    test_plaintext = b"100"
+    print("Verifying reproducibility of encrypting b'100' under each padding mode...")
+    for padding_mode in padding_modes:
+        first = openssl_encrypt(pubkey_path, test_plaintext, modulus_len, padding_mode)
+        second = openssl_encrypt(pubkey_path, test_plaintext, modulus_len, padding_mode)
+        if first is None or second is None:
+            print(f"  {padding_mode}: plaintext too long for this padding mode; skipped")
+            continue
+        if first == second:
+            print(f"  {padding_mode}: identical ciphertexts produced")
+        else:
+            print(f"  {padding_mode}: ciphertexts differ (padding introduces randomness)")
 
 
 def main():
-    args = parse_args()
     target = bytes.fromhex(TARGET_CIPHER_HEX)
     modulus_len = len(target)
     pubkey_path = write_temp_key()
+    padding_modes = ("none", "pkcs1", "default")
     try:
+        verify_mode_reproducibility(pubkey_path, modulus_len, padding_modes)
         candidates = build_candidates()
+        attempts = 0
         for idx, cand in enumerate(candidates, start=1):
-            cipher = openssl_encrypt(pubkey_path, cand, modulus_len, args.padding_mode)
-            if cipher == target:
-                print("MATCH FOUND!")
-                print("candidate bytes repr:", repr(cand))
-                try:
-                    print("candidate text:", cand.decode())
-                except UnicodeDecodeError:
-                    print("candidate text: (non-utf8)")
-                return
+            for padding_mode in padding_modes:
+                cipher = openssl_encrypt(
+                    pubkey_path, cand, modulus_len, padding_mode
+                )
+                if cipher is None:
+                    continue
+                attempts += 1
+                if cipher == target:
+                    print("MATCH FOUND!")
+                    print("padding mode:", padding_mode)
+                    print("candidate bytes repr:", repr(cand))
+                    try:
+                        print("candidate text:", cand.decode())
+                    except UnicodeDecodeError:
+                        print("candidate text: (non-utf8)")
+                    return
             if idx % 100 == 0:
-                print(f"Tried {idx} candidates...")
+                print(
+                    "Tried "
+                    f"{idx} candidates across {len(padding_modes)} padding modes"
+                    f" ({attempts} successful encryptions)..."
+                )
         print("No match found. Try expanding the candidate list.")
     finally:
         if os.path.exists(pubkey_path):
