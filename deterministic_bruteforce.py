@@ -132,7 +132,15 @@ def build_candidates():
         "Fail",
     ]
     for grade in grade_strings:
-        candidates.append(grade.encode())
+        ascii_bytes = grade.encode("ascii")
+        candidates.extend(_newline_variants(ascii_bytes))
+        # Some systems may mistakenly persist the ``repr`` of a bytes object
+        # (for example ``b"C-"``) rather than the raw bytes themselves. To cover
+        # those cases, include the textual representation ``b'grade'`` as ASCII
+        # as well. This differs from the actual bytes object ``b"C-"``; see the
+        # docstring above for ``_newline_variants`` for why we consider both.
+        bytes_literal = f"b'{grade}'".encode("ascii")
+        candidates.extend(_newline_variants(bytes_literal))
     # Deduplicate while preserving order.
     seen = set()
     unique_candidates = []
