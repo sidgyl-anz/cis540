@@ -21,6 +21,70 @@ TARGET_CIPHER_HEX = (
 )
 
 
+WORDS_0_TO_19 = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+]
+
+TENS_WORDS = [
+    "",
+    "",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+]
+
+
+def _two_digit_words(n):
+    """Return the English words for ``n`` where ``0 <= n < 100``."""
+
+    if not 0 <= n < 100:
+        raise ValueError("Expected a number between 0 and 99 inclusive")
+    if n < 20:
+        return WORDS_0_TO_19[n]
+    tens, ones = divmod(n, 10)
+    if ones == 0:
+        return TENS_WORDS[tens]
+    return f"{TENS_WORDS[tens]}-{WORDS_0_TO_19[ones]}"
+
+
+def number_to_words(n):
+    """Convert ``n`` (0-150) to its English words representation."""
+
+    if not 0 <= n <= 150:
+        raise ValueError("Only numbers from 0 through 150 are supported")
+    if n < 100:
+        return _two_digit_words(n)
+    if n == 100:
+        return "one hundred"
+    remainder = n - 100
+    remainder_words = _two_digit_words(remainder)
+    return f"one hundred {remainder_words}"
+
+
 def build_candidates():
     """Generate a small list of plausible plaintext grades."""
     cands = []
