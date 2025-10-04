@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Brute force Alice's RSA-encrypted grade using openssl pkeyutl only."""
 
+import csv
 import os
 import subprocess
 import tempfile
@@ -235,6 +236,7 @@ def main():
     modulus_len = len(target)
     pubkey_path = write_temp_key()
     padding_modes = ("none", "pkcs1", "default")
+    log_path = os.path.join(os.getcwd(), "bruteforce_attempts_log.csv")
     try:
         reproducible = verify_mode_reproducibility(
             pubkey_path, modulus_len, padding_modes
@@ -270,7 +272,7 @@ def main():
                     print("padding mode:", padding_mode)
                     print("candidate bytes repr:", repr(cand))
                     try:
-                        print("candidate text:", cand.decode())
+                        candidate_text = cand.decode()
                     except UnicodeDecodeError:
                         print("candidate text: (non-utf8)")
                     return
@@ -283,6 +285,7 @@ def main():
                     f" ({attempts} successful encryptions)..."
                 )
         print("No match found. Try expanding the candidate list.")
+        print(f"Attempt details logged to {log_path}")
     finally:
         if os.path.exists(pubkey_path):
             os.remove(pubkey_path)
