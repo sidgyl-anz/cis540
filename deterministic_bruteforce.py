@@ -30,12 +30,7 @@ rnnCa8w19lq20OSNPwIDAQAB
 -----END PUBLIC KEY-----
 """
 
-TARGET_CIPHER_HEX = (
-    "9A60E4CE8D70B2A12BB2422D73571A445159955A844AE5EA9995870AA4819BA4"
-    "34835C88AB4F1FBD17712DC525613382FF6A9621CB9BC0F82191EB60AAA369FC"
-    "061A614C18F81FA9906FB168E0E8B0A0EA5C3A9E6E1566820E4831CAA9BDF0FB"
-    "048F8095DE65DB6D9FA79AFF7D40529E512ADB91231D176944064200AEC070A1"
-)
+TARGET_CIPHER_HEX = "9A60E4CE8D70B2A12BB2422D73571A445159955A844AE5EA9995870AA4819BA434835C88AB4F1FBD17712DC525613382FF6A9621CB9BC0F82191EB60AAA369FC061A614C18F81FA9906FB168E0E8B0A0EA5C3A9E6E1566820E4831CAA9BDF0FB048F8095DE65DB6D9FA79AFF7D40529E512ADB91231D176944064200AEC070A1"
 
 
 _CANDIDATE_FILE = os.path.join(os.path.dirname(__file__), "candidates.txt")
@@ -50,7 +45,16 @@ def _load_candidates():
             stripped = line.strip()
             if not stripped or stripped.startswith('#'):
                 continue
-            candidates.append(ast.literal_eval(stripped))
+            parsed = ast.literal_eval(stripped)
+            if isinstance(parsed, str):
+                parsed = parsed.encode('utf-8')
+            elif not isinstance(parsed, bytes):
+                raise TypeError(
+                    "Candidate values must be str or bytes literals, got {}".format(
+                        type(parsed).__name__
+                    )
+                )
+            candidates.append(parsed)
     return tuple(candidates)
 
 
