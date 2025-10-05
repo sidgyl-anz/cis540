@@ -43,7 +43,8 @@ _CANDIDATE_FILE = os.path.join(os.path.dirname(__file__), "candidates.txt")
 
 @lru_cache(maxsize=1)
 def _load_candidates():
-    """Return the tuple of candidate plaintext byte strings loaded from disk."""
+    """Return the tuple of candidate plaintext literals loaded from disk."""
+
     candidates = []
     with open(_CANDIDATE_FILE, 'r', encoding='utf-8') as candidate_file:
         for line in candidate_file:
@@ -55,7 +56,7 @@ def _load_candidates():
 
 
 def build_candidates():
-    """Return a fresh list of candidate plaintext byte strings."""
+    """Return a fresh list of candidate plaintext literals."""
     return list(_load_candidates())
 
 
@@ -200,11 +201,17 @@ def run_candidate_search_for_mode(
     attempts = attempt_offset
     match = None
     for idx, cand in enumerate(candidates, start=1):
-        cipher = openssl_encrypt(pubkey_path, cand, modulus_len, padding_mode)
+        if isinstance(cand, str):
+            candidate_bytes = cand.encode("utf-8")
+        else:
+            candidate_bytes = cand
+        cipher = openssl_encrypt(
+            pubkey_path, candidate_bytes, modulus_len, padding_mode
+        )
         if cipher is None:
             continue
         attempts += 1
-        row = [attempts, idx, padding_mode, repr(cand), cipher.hex()]
+        row = [attempts, idx, padding_mode, repr(candidate_bytes), cipher.hex()]
         writer.writerow(row)
         log_file.flush()
         if printed_examples < example_attempts_to_print:
@@ -218,7 +225,8 @@ def run_candidate_search_for_mode(
         if cipher == target:
             match = {
                 "padding_mode": padding_mode,
-                "candidate": cand,
+                "candidate": candidate_bytes,
+                "candidate_source": cand,
                 "attempt_number": attempts,
                 "candidate_index": idx,
             }
@@ -295,6 +303,9 @@ def main():
                     print("padding mode:", match["padding_mode"])
                     print("candidate index:", match["candidate_index"])
                     print("candidate bytes repr:", repr(match["candidate"]))
+                    source = match.get("candidate_source")
+                    if isinstance(source, str):
+                        print("candidate source string:", repr(source))
                     try:
                         candidate_text = match["candidate"].decode()
                     except UnicodeDecodeError:
