@@ -15,10 +15,12 @@ external Python crypto dependency and mirrors how the ciphertext was generated
 for the assignment this repository accompanies.
 """
 
+import ast
 import csv
 import os
 import subprocess
 import tempfile
+from functools import lru_cache
 
 PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDKClTqiJTUa++IPogThEsiNR4J
@@ -36,134 +38,25 @@ TARGET_CIPHER_HEX = (
 )
 
 
-WORDS_0_TO_19 = [
-    "zero",
-    "one",
-    "two",
-    "three",
-    "four",
-    "five",
-    "six",
-    "seven",
-    "eight",
-    "nine",
-    "ten",
-    "eleven",
-    "twelve",
-    "thirteen",
-    "fourteen",
-    "fifteen",
-    "sixteen",
-    "seventeen",
-    "eighteen",
-    "nineteen",
-]
-
-TENS_WORDS = [
-    "",
-    "",
-    "twenty",
-    "thirty",
-    "forty",
-    "fifty",
-    "sixty",
-    "seventy",
-    "eighty",
-    "ninety",
-]
+_CANDIDATE_FILE = os.path.join(os.path.dirname(__file__), "candidates.txt")
 
 
-def _two_digit_words(n):
-    """Return the English words for ``n`` where ``0 <= n < 100``."""
-
-    if not 0 <= n < 100:
-        raise ValueError("Expected a number between 0 and 99 inclusive")
-    if n < 20:
-        return WORDS_0_TO_19[n]
-    tens, ones = divmod(n, 10)
-    if ones == 0:
-        return TENS_WORDS[tens]
-    return f"{TENS_WORDS[tens]}-{WORDS_0_TO_19[ones]}"
-
-
-def number_to_words(n):
-    """Convert ``n`` (0-150) to its English words representation."""
-
-    if not 0 <= n <= 150:
-        raise ValueError("Only numbers from 0 through 150 are supported")
-    if n < 100:
-        return _two_digit_words(n)
-    if n == 100:
-        return "one hundred"
-    remainder = n - 100
-    remainder_words = _two_digit_words(remainder)
-    return f"one hundred {remainder_words}"
-
-
-def _newline_variants(value):
-    """Yield ``value`` along with LF and CRLF terminated variants."""
-
-    yield value
-    yield value + b"\n"
-    yield value + b"\r\n"
+@lru_cache(maxsize=1)
+def _load_candidates():
+    """Return the tuple of candidate plaintext byte strings loaded from disk."""
+    candidates = []
+    with open(_CANDIDATE_FILE, 'r', encoding='utf-8') as candidate_file:
+        for line in candidate_file:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            candidates.append(ast.literal_eval(stripped))
+    return tuple(candidates)
 
 
 def build_candidates():
-    """Generate a small list of plausible plaintext grades."""
-
-    candidates = []
-    # Whole number scores 0-150 as ASCII bytes, plus newline variants.
-    for i in range(0, 151):
-        ascii_value = str(i).encode("ascii")
-        candidates.extend(_newline_variants(ascii_value))
-        # Single-byte value for the numeric grade, plus newline variants.
-        candidates.extend(_newline_variants(bytes([i])))
-    # Common grade strings.
-    grade_strings = [
-        "A+",
-        "A",
-        "A-",
-        "B+",
-        "B",
-        "B-",
-        "C+",
-        "C",
-        "C-",
-        "D+",
-        "D",
-        "D-",
-        "E",
-        "F",
-        "XF",
-        "I",
-        "W",
-        "P",
-        "S",
-        "U",
-        "AU",
-        "NG",
-        "Pass",
-        "Fail",
-    ]
-    for grade in grade_strings:
-        ascii_bytes = grade.encode("ascii")
-        candidates.extend(_newline_variants(ascii_bytes))
-        # Some systems may mistakenly persist the ``repr`` of a bytes object
-        # (for example ``b"C-"``) rather than the raw bytes themselves. To cover
-        # those cases, include the textual representation ``b'grade'`` as ASCII
-        # as well. This differs from the actual bytes object ``b"C-"``; see the
-        # docstring above for ``_newline_variants`` for why we consider both.
-        bytes_literal = f"b'{grade}'".encode("ascii")
-        candidates.extend(_newline_variants(bytes_literal))
-    # Deduplicate while preserving order.
-    seen = set()
-    unique_candidates = []
-    for item in candidates:
-        if item in seen:
-            continue
-        seen.add(item)
-        unique_candidates.append(item)
-    return unique_candidates
+    """Return a fresh list of candidate plaintext byte strings."""
+    return list(_load_candidates())
 
 
 def write_temp_key():
