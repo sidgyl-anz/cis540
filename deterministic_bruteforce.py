@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
 """Brute force Alice's RSA-encrypted grade using :command:`openssl pkeyutl`.
-
-The script performs three high-level steps:
-
-1. Build a list of plausible plaintext grade candidates.
-2. Demonstrate whether repeated encryptions of a sample grade are deterministic
-   for three padding modes (``none``, ``pkcs1``, and ``default``).
-3. Brute-force the ciphertext under each padding mode, logging every attempt and
-   reporting the first match.
-
-The heavy lifting happens in :func:`openssl_encrypt`, which shells out to
-``openssl``.  Keeping the RSA handling inside OpenSSL avoids the need for an
-external Python crypto dependency and mirrors how the ciphertext was generated
-for the assignment this repository accompanies.
 """
 
 import ast
