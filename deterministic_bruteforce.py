@@ -50,7 +50,16 @@ def _load_candidates():
             stripped = line.strip()
             if not stripped or stripped.startswith('#'):
                 continue
-            candidates.append(ast.literal_eval(stripped))
+            parsed = ast.literal_eval(stripped)
+            if isinstance(parsed, str):
+                parsed = parsed.encode('utf-8')
+            elif not isinstance(parsed, bytes):
+                raise TypeError(
+                    "Candidate values must be str or bytes literals, got {}".format(
+                        type(parsed).__name__
+                    )
+                )
+            candidates.append(parsed)
     return tuple(candidates)
 
 
