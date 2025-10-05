@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""Brute force Alice's RSA-encrypted grade using openssl pkeyutl only."""
+"""Brute force Alice's RSA-encrypted grade using :command:`openssl pkeyutl`.
+
+The script performs three high-level steps:
+
+1. Build a list of plausible plaintext grade candidates.
+2. Demonstrate whether repeated encryptions of a sample grade are deterministic
+   for three padding modes (``none``, ``pkcs1``, and ``default``).
+3. Brute-force the ciphertext under each padding mode, logging every attempt and
+   reporting the first match.
+
+The heavy lifting happens in :func:`openssl_encrypt`, which shells out to
+``openssl``.  Keeping the RSA handling inside OpenSSL avoids the need for an
+external Python crypto dependency and mirrors how the ciphertext was generated
+for the assignment this repository accompanies.
+"""
 
 import csv
 import os
@@ -238,29 +252,97 @@ def verify_mode_reproducibility(pubkey_path, modulus_len, padding_modes):
             )
             if cipher is None:
                 print(
-                    f"  {padding_mode}: plaintext too long for this padding mode; skipping"
-                    " sample display"
+                    "  Mode {mode} trial {trial}: plaintext too long for this padding mode;"
+                    " skipping sample display".format(mode=padding_mode, trial=attempt)
                 )
                 reproducible[padding_mode] = False
                 break
             sample_ciphertexts.append(cipher)
-            print(f"  {padding_mode} sample #{attempt}: {cipher.hex()}")
+            print(
+                "  Mode {mode} trial {trial}: {cipher}".format(
+                    mode=padding_mode, trial=attempt, cipher=cipher.hex()
+                )
+            )
         else:
             unique_ciphertexts = {c for c in sample_ciphertexts}
             if len(unique_ciphertexts) == 1:
                 print(
-                    f"  {padding_mode}: ciphertexts identical across {samples_per_mode} attempts"
+                    "  Mode {mode}: ciphertexts identical across {count} attempts".format(
+                        mode=padding_mode, count=samples_per_mode
+                    )
                 )
                 reproducible[padding_mode] = True
             else:
                 print(
-                    f"  {padding_mode}: ciphertexts differ across {samples_per_mode} attempts"
+                    "  Mode {mode}: ciphertexts differ across {count} attempts".format(
+                        mode=padding_mode, count=samples_per_mode
+                    )
                 )
                 reproducible[padding_mode] = False
     return reproducible
 
 
+def run_candidate_search_for_mode(
+    padding_mode,
+    candidates,
+    target,
+    modulus_len,
+    pubkey_path,
+    writer,
+    log_file,
+    attempt_offset,
+    example_attempts_to_print,
+    printed_examples,
+    notified_log_only,
+):
+    """Run the brute-force search for a single ``padding_mode``.
+
+    Parameters are passed explicitly so the function remains pure with respect
+    to side effects (aside from logging).  The function returns a tuple of
+    ``(attempts_used, printed_examples, notified_log_only, match)`` where
+    ``match`` is either ``None`` or a ``dict`` describing the successful
+    candidate.
+    """
+
+    attempts = attempt_offset
+    match = None
+    for idx, cand in enumerate(candidates, start=1):
+        cipher = openssl_encrypt(pubkey_path, cand, modulus_len, padding_mode)
+        if cipher is None:
+            continue
+        attempts += 1
+        row = [attempts, idx, padding_mode, repr(cand), cipher.hex()]
+        writer.writerow(row)
+        log_file.flush()
+        if printed_examples < example_attempts_to_print:
+            print(",".join(str(value) for value in row))
+            printed_examples += 1
+            if printed_examples == example_attempts_to_print:
+                print("(Further attempts are logged to bruteforce_attempts_log.csv only.)")
+        elif not notified_log_only:
+            print("(All additional attempts are recorded in bruteforce_attempts_log.csv.)")
+            notified_log_only = True
+        if cipher == target:
+            match = {
+                "padding_mode": padding_mode,
+                "candidate": cand,
+                "attempt_number": attempts,
+                "candidate_index": idx,
+            }
+            break
+        if idx % 100 == 0:
+            print(
+                "Tried {idx} candidates under padding mode {mode} ({attempts} successful"
+                " encryptions in this mode)...".format(
+                    idx=idx, mode=padding_mode, attempts=attempts
+                )
+            )
+    return attempts, printed_examples, notified_log_only, match
+
+
 def main():
+    """Coordinate the demonstration of deterministic modes and grade search."""
+
     target = bytes.fromhex(TARGET_CIPHER_HEX)
     modulus_len = len(target)
     pubkey_path = write_temp_key()
@@ -298,52 +380,35 @@ def main():
             writer.writerow(header)
             print("# Attempt log examples (full log written to bruteforce_attempts_log.csv)")
             print(",".join(header))
-            for idx, cand in enumerate(candidates, start=1):
-                for padding_mode in padding_modes:
-                    cipher = openssl_encrypt(
-                        pubkey_path, cand, modulus_len, padding_mode
-                    )
-                    if cipher is None:
-                        continue
-                    attempts += 1
-                    row = [
-                        attempts,
-                        idx,
+            for padding_mode in padding_modes:
+                print(f"\n=== Running brute-force attempts for padding mode: {padding_mode} ===")
+                attempts, printed_examples, notified_log_only, match = (
+                    run_candidate_search_for_mode(
                         padding_mode,
-                        repr(cand),
-                        cipher.hex(),
-                    ]
-                    writer.writerow(row)
-                    log_file.flush()
-                    if printed_examples < example_attempts_to_print:
-                        print(",".join(str(value) for value in row))
-                        printed_examples += 1
-                        if printed_examples == example_attempts_to_print:
-                            print(
-                                "(Further attempts are logged to bruteforce_attempts_log.csv only.)"
-                            )
-                    elif not notified_log_only:
-                        print(
-                            "(All additional attempts are recorded in bruteforce_attempts_log.csv.)"
-                        )
-                        notified_log_only = True
-                    if cipher == target:
-                        print("MATCH FOUND!")
-                        print("padding mode:", padding_mode)
-                        print("candidate bytes repr:", repr(cand))
-                        try:
-                            candidate_text = cand.decode()
-                        except UnicodeDecodeError:
-                            print("candidate text: (non-utf8)")
-                        else:
-                            print("candidate text:", candidate_text)
-                        return
-                if idx % 100 == 0:
-                    print(
-                        "Tried "
-                        f"{idx} candidates across {len(padding_modes)} padding modes"
-                        f" ({attempts} successful encryptions)..."
+                        candidates,
+                        target,
+                        modulus_len,
+                        pubkey_path,
+                        writer,
+                        log_file,
+                        attempts,
+                        example_attempts_to_print,
+                        printed_examples,
+                        notified_log_only,
                     )
+                )
+                if match:
+                    print("MATCH FOUND!")
+                    print("padding mode:", match["padding_mode"])
+                    print("candidate index:", match["candidate_index"])
+                    print("candidate bytes repr:", repr(match["candidate"]))
+                    try:
+                        candidate_text = match["candidate"].decode()
+                    except UnicodeDecodeError:
+                        print("candidate text: (non-utf8)")
+                    else:
+                        print("candidate text:", candidate_text)
+                    return
         print("No match found. Try expanding the candidate list.")
         print(f"Attempt details logged to {log_path} and echoed above.")
     finally:
