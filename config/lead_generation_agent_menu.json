@@ -1,0 +1,46 @@
+{
+  "menus": [
+    {"id": "home", "label": "Home", "level": "L0"},
+    {"id": "reports", "label": "Reports", "level": "L0"},
+    {"id": "settings", "label": "Settings", "level": "L0"},
+    {
+      "id": "ai-lead-agent",
+      "label": "AI Lead Agent (Lead Generation Agent)",
+      "level": "L0",
+      "position": "end",
+      "children": [
+        {"id": "overview", "label": "Overview", "level": "L1"},
+        {"id": "playbooks", "label": "Playbooks", "level": "L1"},
+        {"id": "scenarios", "label": "Scenarios", "level": "L1"}
+      ]
+    }
+  ],
+  "agents": {
+    "leadGeneration": {
+      "name": "AI Lead Agent (Lead Generation Agent)",
+      "sections": [
+        {
+          "id": "overview",
+          "title": "Overview",
+          "content": "Summarizes the AI-driven workflow for qualifying inbound leads."
+        },
+        {
+          "id": "playbooks",
+          "title": "Playbooks",
+          "content": "Contains reusable outreach strategies and cadences."
+        },
+        {
+          "id": "scenarios",
+          "title": "Scenarios",
+          "content": "Shows curated example interactions for the agent."
+        }
+      ],
+      "display": {
+        "scenarioReferences": [
+          {"id": "scenario-1", "title": "Scenario 1: First-touch outreach"},
+          {"id": "scenario-2", "title": "Scenario 2: Re-engagement follow-up"}
+        ]
+      }
+    }
+  }
+}
