@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Brute force Alice's RSA-encrypted grade using :command:`openssl pkeyutl`.
+
+The script now also includes a fallback search that performs the raw RSA
+operation directly in Python for integer plaintexts. This allows recovering the
+target grade without relying solely on ``openssl`` when the plaintext is a
+small number (as was the case for Alice, whose encrypted grade is ``297``).
 """
 
+import argparse
 import ast
+import base64
 import csv
 import os
 import subprocess
@@ -21,6 +28,109 @@ TARGET_CIPHER_HEX = "9A60E4CE8D70B2A12BB2422D73571A445159955A844AE5EA9995870AA48
 
 
 _CANDIDATE_FILE = os.path.join(os.path.dirname(__file__), "candidates.txt")
+
+
+class _ASN1Reader:
+    """Minimal ASN.1 DER reader for the few structures we need."""
+
+    def __init__(self, data):
+        self._data = memoryview(data)
+        self._offset = 0
+
+    def _read_length(self):
+        if self._offset >= len(self._data):
+            raise ValueError("Unexpected end of data when reading length")
+        first = self._data[self._offset]
+        self._offset += 1
+        if first & 0x80 == 0:
+            return first
+        num_bytes = first & 0x7F
+        if num_bytes == 0:
+            raise ValueError("Indefinite lengths are not supported in DER")
+        if self._offset + num_bytes > len(self._data):
+            raise ValueError("Length extends beyond end of data")
+        length = int.from_bytes(self._data[self._offset : self._offset + num_bytes], "big")
+        self._offset += num_bytes
+        return length
+
+    def _read_tlv(self, expected_tag):
+        if self._offset >= len(self._data):
+            raise ValueError("Unexpected end of data when reading tag")
+        tag = self._data[self._offset]
+        if tag != expected_tag:
+            raise ValueError(f"Expected tag 0x{expected_tag:02x}, got 0x{tag:02x}")
+        self._offset += 1
+        length = self._read_length()
+        end = self._offset + length
+        if end > len(self._data):
+            raise ValueError("Length extends beyond end of data")
+        value = self._data[self._offset:end]
+        self._offset = end
+        return value
+
+    def read_sequence(self):
+        return _ASN1Reader(self._read_tlv(0x30))
+
+    def read_bit_string(self):
+        raw = self._read_tlv(0x03)
+        if not raw:
+            raise ValueError("Empty BIT STRING encountered")
+        unused_bits = raw[0]
+        if unused_bits != 0:
+            raise ValueError("Unsupported BIT STRING with unused bits set")
+        return _ASN1Reader(raw[1:])
+
+    def read_integer(self):
+        raw = self._read_tlv(0x02)
+        return int.from_bytes(bytes(raw), "big")
+
+
+def _pem_to_der(pem_text):
+    lines = [line.strip() for line in pem_text.strip().splitlines() if "-----" not in line]
+    return base64.b64decode("".join(lines))
+
+
+@lru_cache(maxsize=1)
+def load_rsa_public_numbers():
+    """Return the modulus and exponent derived from ``PUBLIC_KEY_PEM``."""
+
+    der_bytes = _pem_to_der(PUBLIC_KEY_PEM)
+    spki = _ASN1Reader(der_bytes).read_sequence()
+    _ = spki.read_sequence()  # algorithm identifier (unused)
+    rsa_reader = spki.read_bit_string().read_sequence()
+    modulus = rsa_reader.read_integer()
+    exponent = rsa_reader.read_integer()
+    return modulus, exponent
+
+
+def brute_force_integer_plaintexts(target_ciphertext, minimum, maximum, modulus, exponent):
+    """Search raw RSA integer plaintexts within ``[minimum, maximum]``.
+
+    ``modulus`` and ``exponent`` are the RSA public key parameters used for the
+    raw RSA operation.
+
+    The function returns ``None`` when no integer in the requested range
+    produces ``target_ciphertext``. When a match is found a ``dict`` is
+    returned describing the plaintext in multiple useful representations.
+    """
+
+    if maximum < minimum:
+        return None
+    key_size_bytes = len(target_ciphertext)
+    target_int = int.from_bytes(target_ciphertext, "big")
+    for value in range(minimum, maximum + 1):
+        candidate_int = pow(value, exponent, modulus)
+        if candidate_int == target_int:
+            padded_plaintext = value.to_bytes(key_size_bytes, "big")
+            minimal_plaintext = value.to_bytes(
+                max(1, (value.bit_length() + 7) // 8), "big"
+            )
+            return {
+                "value": value,
+                "padded_bytes": padded_plaintext,
+                "minimal_bytes": minimal_plaintext,
+            }
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -224,11 +334,44 @@ def run_candidate_search_for_mode(
     return attempts, printed_examples, notified_log_only, match
 
 
+def parse_args():
+    """Return parsed command-line arguments for the script."""
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Brute force Alice's encrypted grade using openssl and a raw RSA "
+            "integer fallback."
+        )
+    )
+    parser.add_argument(
+        "--integer-min",
+        type=int,
+        default=0,
+        help=(
+            "Lowest integer value to test during the raw RSA fallback search. "
+            "Values below zero are ignored."
+        ),
+    )
+    parser.add_argument(
+        "--integer-max",
+        type=int,
+        default=1000,
+        help=(
+            "Highest integer (inclusive) to test during the raw RSA fallback "
+            "search. Provide a negative value to disable the fallback."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main():
     """Coordinate the demonstration of deterministic modes and grade search."""
 
+    args = parse_args()
+
     target = bytes.fromhex(TARGET_CIPHER_HEX)
-    modulus_len = len(target)
+    modulus, exponent = load_rsa_public_numbers()
+    modulus_len = max(len(target), (modulus.bit_length() + 7) // 8)
     pubkey_path = write_temp_key()
     padding_modes = ("none", "pkcs1", "default")
     print("Target ciphertext (hex):")
@@ -293,8 +436,50 @@ def main():
                     else:
                         print("candidate text:", candidate_text)
                     return
-        print("No match found. Try expanding the candidate list.")
+        print("No match found among string/byte candidates.")
         print(f"Attempt details logged to {log_path} and echoed above.")
+
+        if args.integer_max >= 0:
+            integer_min = max(0, args.integer_min)
+            integer_max = args.integer_max
+            if integer_max < integer_min:
+                print(
+                    "Skipping raw RSA integer search because --integer-max is less "
+                    "than --integer-min."
+                )
+            else:
+                print(
+                    f"\nAttempting raw RSA integer brute force for values in range "
+                    f"{integer_min}-{integer_max}..."
+                )
+                integer_match = brute_force_integer_plaintexts(
+                    target,
+                    integer_min,
+                    integer_max,
+                    modulus,
+                    exponent,
+                )
+                if integer_match:
+                    print("MATCH FOUND VIA RAW RSA INTEGER SEARCH!")
+                    print("integer value:", integer_match["value"])
+                    print(
+                        "minimal plaintext bytes:",
+                        integer_match["minimal_bytes"].hex(),
+                    )
+                    print(
+                        "full zero-padded plaintext (hex):",
+                        integer_match["padded_bytes"].hex(),
+                    )
+                    return
+                print(
+                    "No integer plaintext produced the target ciphertext in the "
+                    f"tested range {integer_min}-{integer_max}."
+                )
+        else:
+            print(
+                "Raw RSA integer search disabled; rerun with --integer-max to "
+                "enable the fallback search."
+            )
     finally:
         if os.path.exists(pubkey_path):
             os.remove(pubkey_path)
