@@ -61,6 +61,13 @@ class EncryptionAttempt:
                 " ciphertexts for grade {}".format(self.grade)
             )
 
+    def summary(self) -> str:
+        """Return a human-readable confirmation of the validation status."""
+        return (
+            "grade {grade} confirmed: both OpenSSL rsa_padding_mode:none and "
+            "Python pow() produced the same ciphertext".format(grade=self.grade)
+        )
+
 
 TARGET_CIPHER_BYTES = bytes.fromhex(TARGET_CIPHER_HEX)
 
@@ -82,6 +89,7 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+TARGET_CIPHER_BYTES = bytes.fromhex(TARGET_CIPHER_HEX)
 
 def load_public_key(pubkey_path: str) -> PublicKeyInfo:
     result = subprocess.run(
@@ -163,16 +171,20 @@ def python_raw_encrypt(grade: int, key: PublicKeyInfo) -> bytes:
     return cipher_int.to_bytes(key.modulus_bytes, "big")
 
 
-def search_grades(grades: Iterable[int], key: PublicKeyInfo, pubkey_path: str) -> EncryptionAttempt | None:
+def search_grades(
+    grades: Iterable[int], key: PublicKeyInfo, pubkey_path: str
+) -> tuple[EncryptionAttempt | None, int]:
+    total_attempts = 0
     for grade in grades:
+        total_attempts += 1
         padded_plaintext = grade.to_bytes(key.modulus_bytes, "big")
         openssl_cipher = run_openssl_raw_encrypt(pubkey_path, padded_plaintext)
         python_cipher = python_raw_encrypt(grade, key)
         attempt = EncryptionAttempt(grade, openssl_cipher, python_cipher)
         attempt.validate()
-        if attempt.matches_target and int.from_bytes(padded_plaintext, "big") == grade:
-            return attempt
-    return None
+        if attempt.matches_target:
+            return attempt, total_attempts
+    return None, total_attempts
 
 
 def main() -> None:
@@ -183,7 +195,12 @@ def main() -> None:
         print("Target ciphertext (hex):")
         print(TARGET_CIPHER_HEX)
         search_range = range(0, args.max_grade + 1)
-        attempt = search_grades(search_range, key, pubkey_path)
+        attempt, total_attempts = search_grades(search_range, key, pubkey_path)
+        print(
+            "Checked {} grades using both OpenSSL and Python modular exponentiation.".format(
+                total_attempts
+            )
+        )
         if attempt is None:
             print(
                 "No grade in the range 0-{} produced the target ciphertext.".format(
@@ -194,7 +211,11 @@ def main() -> None:
         print("Match found!")
         print("grade:", attempt.grade)
         print("ciphertext (hex):", attempt.openssl_cipher.hex())
-        print("plaintext bytes (hex):", attempt.grade.to_bytes(key.modulus_bytes, "big").hex())
+        print(attempt.summary())
+        print(
+            "plaintext bytes (hex):",
+            attempt.grade.to_bytes(key.modulus_bytes, "big").hex(),
+        )
     finally:
         if os.path.exists(pubkey_path):
             os.remove(pubkey_path)
