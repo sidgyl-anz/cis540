@@ -89,6 +89,7 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+TARGET_CIPHER_BYTES = bytes.fromhex(TARGET_CIPHER_HEX)
 
 def load_public_key(pubkey_path: str) -> PublicKeyInfo:
     result = subprocess.run(
